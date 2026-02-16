@@ -191,8 +191,10 @@ class ContinuousBatchingIOs:
         else:
             self.attention_mask = None
 
-        # If block_table is needed, it is allocated separately
-        n = num_groups if self.cache.max_blocks_per_request > 0 else 0
+        # We create the block table only if there are no sliding window layers and there is a maximum number of blocks per request
+        # TODO: add support for sliding window layers with block table
+        create_block_table = self.cache.max_blocks_per_request > 0 and self.cache.num_sliding_attention_groups == 0
+        n = num_groups if create_block_table else 0
         self.block_table = torch.empty(
             (n, max_batch_tokens, self.cache.max_blocks_per_request), dtype=torch.int32, device=self.device, pin_memory=pin_memory
         )
