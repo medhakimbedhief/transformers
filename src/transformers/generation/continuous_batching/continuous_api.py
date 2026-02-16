@@ -409,14 +409,15 @@ class ContinuousBatchProcessor:
 
         # Otherwise, we use create or replay the graph
         else:
-            graph = self.inputs_and_outputs.graphs.get_graph(padded_q, padded_read_index_size)
+            key = (padded_q, padded_read_index_size, self.inputs_and_outputs.use_block_table)
+            graph = self.inputs_and_outputs.graphs.get_graph(key)
             # Case: the graph already exists, so we replay it
             if graph is not None:
                 with torch.cuda.stream(compute_stream):
                     graph.replay()
             # Otherwise, the graph does not exist, so we create it
             else:
-                logger.info(f"Creating graph for {(padded_q, padded_read_index_size) = }")
+                logger.info(f"Creating graph for {key = }")
                 # TODO: remove this once we are sure there are no race conditions
                 # compute_stream.wait_stream(torch.cuda.current_stream())
                 # Warmup
@@ -428,7 +429,7 @@ class ContinuousBatchProcessor:
                 with torch.cuda.graph(graph, stream=compute_stream):
                     self._forward_process_and_sample(model, batch_data, logit_processor, do_sample)
                 # Store
-                self.inputs_and_outputs.graphs.set_graph(padded_q, padded_read_index_size, graph)
+                self.inputs_and_outputs.graphs.set_graph(key, graph)
 
         # In any case, we transfer the outputs to the host
         self.inputs_and_outputs.retrieve_device_outputs()

@@ -138,6 +138,7 @@ class PagedAttentionCache:
         self.config = config
         self.dtype = dtype
         self.device = device
+        self.max_blocks_per_request = 4 * 16  # TODO: make this configurable
 
         # Extract model dimensions
         kv_heads = getattr(config, "num_key_value_heads", None)
@@ -146,7 +147,7 @@ class PagedAttentionCache:
         self.head_dim: int = head_dim if head_dim is not None else config.hidden_size // config.num_attention_heads
 
         # Extract cache dimensions
-        self.block_size = getattr(generation_config, "block_size", 32)
+        self.block_size = getattr(generation_config, "block_size", 256)
 
         # Group layers depending on the attention mix
         layer_groups, group_types = group_layers_by_attn_type(config)
@@ -307,6 +308,10 @@ class PagedAttentionCache:
             read_indices.extend(indices)
             indices = cm.get_write_indices(request_id, past_length, query_length)
             write_indices.extend(indices)
+
+    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+        for i,cm in enumerate(self.group_cache_managers):
+            cm.fill_block_table(request_id, past_length, query_length, block_table[i])
 
     @traced
     def get_seqlens_k(self, past_length: int, query_length: int) -> dict[str, int]:

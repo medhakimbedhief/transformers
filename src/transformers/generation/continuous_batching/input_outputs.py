@@ -112,6 +112,7 @@ class ContinuousBatchingIOs:
         self.actual_read_sizes = [0 for _ in range(cache.num_groups)]
         self.actual_write_sizes = [0 for _ in range(cache.num_groups)]
         # Setup other accumulators
+        self.use_block_table = False  # True if all requests in batch have query_length == 1
         self.requests_in_batch: list[FutureRequestState] = []
         self.req_id_to_new_token_position: dict[str, int] = {}  # only used for async API
         self.graphs: CudaGraphBuffer = CudaGraphBuffer(max_graphs)
@@ -190,6 +191,12 @@ class ContinuousBatchingIOs:
         else:
             self.attention_mask = None
 
+        # If block_table is needed, it is allocated separately
+        n = num_groups if self.cache.max_blocks_per_request > 0 else 0
+        self.block_table = torch.empty(
+            (n, max_batch_tokens, self.cache.max_blocks_per_request), dtype=torch.int32, device=self.device, pin_memory=pin_memory
+        )
+
         # For other kwargs, we need a list of tensors with as many tensors as there are groups
         self.write_index_storage = torch.empty(
             (num_groups, max_batch_tokens), dtype=torch.int32, device=self.device, pin_memory=pin_memory
@@ -208,6 +215,7 @@ class ContinuousBatchingIOs:
         other.actual_batch_size = self.actual_batch_size
         other.actual_read_sizes = self.actual_read_sizes[:]
         other.actual_write_sizes = self.actual_write_sizes[:]
+        other.use_block_table = self.use_block_table
         # Transfer scalar attributes
         other.total_seqlen_q = self.total_seqlen_q
         other.max_seqlen_q = self.max_seqlen_q
@@ -220,6 +228,9 @@ class ContinuousBatchingIOs:
             if self.attention_mask is not None and other.attention_mask is not None:
                 for layer_type in self.attention_mask.keys():
                     other.attention_mask[layer_type].copy_(self.attention_mask[layer_type], non_blocking=non_blocking)
+            # Only transfer block_table for decode-only batches (when it's actually used)
+            if self.use_block_table:
+                other.block_table.copy_(self.block_table, non_blocking=non_blocking)
 
     @traced
     @torch.no_grad()
@@ -231,6 +242,7 @@ class ContinuousBatchingIOs:
         # Compute the slice to reset
         q_len = self.write_index_storage.size(-1) if full_reset else self.actual_query_length
         k_len = self.read_index_storage.size(-1) if full_reset else self.actual_key_length
+        b_size = self.write_index_storage.size(1) if full_reset else self.actual_batch_size
 
         # Reset the attributes part of the bulk input tensor in one kernel
         self._bulk_input_tensor[:, : q_len + 1].zero_()
@@ -249,6 +261,10 @@ class ContinuousBatchingIOs:
         # Reset the attributes that are lists of tensors
         self.write_index_storage[:, :q_len].fill_(-2)  # -1 is used to let the cache where new states go
         self.read_index_storage[:, : q_len + k_len].fill_(-2)  # same
+
+        # Only reset block_table if it was used in the previous batch (use_block_table still holds previous value)
+        if self.use_block_table:
+            self.block_table[:, :b_size].fill_(-1)
 
     # These getter function help create a common interface for the sync and async IOs
     def get_cumulative_seqlens(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -295,6 +311,13 @@ class ContinuousBatchingIOs:
         # Keep track of this requests in the batch, which will be useful to update the batch later
         if not requests_in_batch:
             raise ValueError("No requests in batch")
+
+        # Determine if this is a decode-only batch upfront (all requests have query_length == 1)
+        # This is needed to decide whether to use block_table or read/write indices
+        if self.block_table.numel() > 0:
+            self.use_block_table = all(len(fs.state.tokens_to_process) == 1 for fs in requests_in_batch) # TODO: take care of this step in the CPU step
+        else:
+            self.use_block_table = False
 
         # Reset the static tensors used for storage
         self._reset_static_tensors()  # FIXME: why does this make the generation faster?
@@ -343,10 +366,13 @@ class ContinuousBatchingIOs:
                 cumulative_seqlens_k[layer_type].append(cumulative_seqlens_k[layer_type][-1] + layer_type_seqlen_k)
                 self.max_seqlen_k[layer_type] = max(self.max_seqlen_k[layer_type], layer_type_seqlen_k)
 
-            # We extend the read and write indices for the cache
-            self.cache.extend_read_and_write_indices(
-                state.request_id, past_length, query_length, read_index, write_index
-            )
+            # We extend the read and write indices for the cache, or fill the block table for decode-only batches
+            if self.use_block_table:
+                self.cache.fill_block_table(state.request_id, past_length, query_length, self.block_table[:, self.actual_batch_size-1, :])
+            else:
+                self.cache.extend_read_and_write_indices(
+                    state.request_id, past_length, query_length, read_index, write_index
+                )
 
             # If the request has no remaining prefill tokens, it means the next token prediction is relevant
             if future_state.has_new_token:
@@ -457,7 +483,10 @@ class ContinuousBatchingIOs:
             self.time_tracker.end_cpu_span()
             self.time_tracker.start_gpu_span()
 
-        return kwargs.asdict()  # TODO: this is imperfect, check if there is no better way to juggle dict / dataclass
+        kwargs_dict = kwargs.asdict()  # TODO: this is imperfect, check if there is no better way to juggle dict / dataclass
+        if self.use_block_table:
+            kwargs_dict["block_table"] = self.block_table
+        return kwargs_dict
 
 
 class HostDeviceIOPair:
@@ -635,6 +664,10 @@ class ContinuousBatchingAsyncIOs:
     @property
     def graphs(self) -> CudaGraphBuffer:
         return self.io_pairs[self.current_pair].device_io.graphs
+
+    @property
+    def use_block_table(self) -> bool:
+        return self.io_pairs[self.current_pair].host_io.use_block_table
 
     # The retrieve_device_outputs method is where the D2H transfer happens AND where we switch IO pair
     def retrieve_device_outputs(self) -> None:
