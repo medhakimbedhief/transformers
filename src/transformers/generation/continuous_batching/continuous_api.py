@@ -390,12 +390,19 @@ class ContinuousBatchProcessor:
 
         # If inputs are static sized, we find the padded sizes of the queries and keys/values
         if self._pad_inputs:
+            # In all cases, we pad the queries
             actual_query_length, _, _, actual_read_sizes, _ = self.inputs_and_outputs.get_actual_lengths()
             padded_q = pad_to_interval(actual_query_length, self.q_padding_interval_size, self.max_batch_tokens)
-            max_read_index_size = max(actual_read_sizes)
-            padded_read_index_size = pad_to_interval(
-                max_read_index_size, self.kv_padding_interval_size, self.cache.num_pages
-            )
+            # If the block table is used, we only pad the queries
+            if self.inputs_and_outputs.use_block_table:
+                padded_read_index_size = 0
+            # Otherwise, we pad the read / write indices
+            else:
+                padded_read_index_size = pad_to_interval(
+                    size=max(actual_read_sizes),
+                    interval_size=self.kv_padding_interval_size,
+                    max_value=self.cache.num_pages
+                )
         else:
             padded_q, padded_read_index_size = 0, 0
         # Retrieve the model kwargs with or without padding
@@ -409,7 +416,7 @@ class ContinuousBatchProcessor:
 
         # Otherwise, we use create or replay the graph
         else:
-            key = (padded_q, padded_read_index_size, self.inputs_and_outputs.use_block_table)
+            key = (padded_q, padded_read_index_size)
             graph = self.inputs_and_outputs.graphs.get_graph(key)
             # Case: the graph already exists, so we replay it
             if graph is not None:

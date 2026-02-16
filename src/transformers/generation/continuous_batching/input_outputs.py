@@ -485,7 +485,7 @@ class ContinuousBatchingIOs:
 
         kwargs_dict = kwargs.asdict()  # TODO: this is imperfect, check if there is no better way to juggle dict / dataclass
         if self.use_block_table:
-            kwargs_dict["block_table"] = self.block_table
+            kwargs_dict["block_table"] = self.block_table[:, :q_len]
         return kwargs_dict
 
 

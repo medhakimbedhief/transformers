@@ -117,10 +117,6 @@ def _paged_attention_with_kvcache(
     batch_size = q.size(2)
     q_batched = q.squeeze(0).transpose(0, 1).unsqueeze(1).contiguous()  # [batch_size, 1, num_heads, head_dim]
 
-    # Get block table for this layer group: [num_groups, max_batch_tokens, max_blocks] -> [batch_size, max_blocks]
-    # Slice to actual batch_size since block_table is allocated with max_batch_tokens
-    layer_block_table = block_table[group_idx, :batch_size]
-
     # Reshape K, V from [1, num_kv_heads, batch_size, head_dim] to [batch_size, 1, num_kv_heads, head_dim]
     k_new = k.squeeze(0).transpose(0, 1).unsqueeze(1).contiguous()  # [batch_size, 1, num_kv_heads, head_dim]
     v_new = v.squeeze(0).transpose(0, 1).unsqueeze(1).contiguous()  # [batch_size, 1, num_kv_heads, head_dim]
@@ -143,7 +139,7 @@ def _paged_attention_with_kvcache(
         k=k_new,
         v=v_new,
         cache_seqlens=cache_seqlens,
-        page_table=layer_block_table,
+        page_table=block_table[group_idx],
         softmax_scale=module.scaling,
         causal=True,
         window_size=sliding_window,
