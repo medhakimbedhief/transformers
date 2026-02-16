@@ -515,3 +515,6 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         if padding_length > 0:
             physical_indices = [-1] * padding_length + physical_indices
         return physical_indices
+
+    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+        raise NotImplementedError("Sliding window attention layers do not support block table")
