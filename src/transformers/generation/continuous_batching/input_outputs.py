@@ -20,6 +20,7 @@ import torch
 
 from transformers.configuration_utils import PretrainedConfig
 
+from ...modeling_flash_attention_utils import lazy_import_paged_flash_attention
 from ...utils.metrics import traced
 from .cache import PagedAttentionCache
 from .requests import TMP_TOKEN_ID, FutureRequestState, logger
@@ -44,6 +45,7 @@ class PagedAttentionArgs:
         read_index: List of tensors indicating which cache positions to read from, one per attention group.
         logits_indices: Tensor indicating which positions in the output should be used for next-token prediction.
         cache: The [`PagedAttentionCache`] instance managing the KV cache.
+        block_table: Block table for paged KV cache. If provided, uses `flash_attn_with_kvcache` for fused attention + cache update.
         use_cache: Whether to use caching (always `False` in continuous batching as the cache is managed externally).
     """
 
@@ -58,6 +60,7 @@ class PagedAttentionArgs:
     read_index: list[torch.Tensor]
     logits_indices: torch.Tensor
     cache: PagedAttentionCache
+    block_table: torch.Tensor | None
     use_cache: bool = False
 
     def asdict(self) -> dict[str, Any]:
@@ -73,6 +76,7 @@ class PagedAttentionArgs:
             "read_index": self.read_index,
             "logits_indices": self.logits_indices,
             "cache": self.cache,
+            "block_table": self.block_table,
             "use_cache": self.use_cache,
         }
 
@@ -192,10 +196,13 @@ class ContinuousBatchingIOs:
             self.attention_mask = None
 
         # We create the block table only if the config permits it
+        flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
         create_block_table = all([
             self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
             self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
             self.attention_mask is None,  # Block table is only support for flash attention
+            torch.cuda.is_available(),  # Block table is only supported on CUDA
+            flash_attn_with_kvcache is not None,  # Block table is only supported if flash_attn_with_kvcache is available
         ])
         n = num_groups if create_block_table else 0
         self.block_table = torch.empty(
@@ -442,6 +449,7 @@ class ContinuousBatchingIOs:
             read_index=[],
             write_index=[],
             cache=self.cache,
+            block_table=self.block_table[:, :q_len] if self.use_block_table else None,
             use_cache=False,
         )
 

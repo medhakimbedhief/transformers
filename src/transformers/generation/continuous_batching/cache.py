@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import inspect
 from math import floor, gcd, sqrt
+from typing import Any
 
 import torch
 
@@ -138,7 +140,7 @@ class PagedAttentionCache:
         self.config = config
         self.dtype = dtype
         self.device = device
-        self.max_blocks_per_request = 4 * 16  # TODO: make this configurable
+        self.max_blocks_per_request = getattr(generation_config, "max_blocks_per_request", 4 * 16)  # TODO: make this configurable
 
         # Extract model dimensions
         kv_heads = getattr(config, "num_key_value_heads", None)
@@ -245,6 +247,9 @@ class PagedAttentionCache:
         self.use_prefix_sharing = allow_block_sharing and group_types == ["full_attention"]
         self._block_manager = BlockManager(num_blocks, self.block_size)
         self._total_prefix_length: int = 0  # a counter to measure the impact of prefix sharing, also used in tests
+
+        # For block table support, we lazy init the name of the block table key
+        self._block_table_key = None
 
     def will_allocation_be_successful(self, num_requested_blocks: int, allocated_blocks: int) -> bool:
         """Returns a boolean indicating if the allocation of (num_requested_blocks) blocks will be successful. The
@@ -377,6 +382,20 @@ class PagedAttentionCache:
 
         # Return the new KV values
         return key_states_with_cache, value_states_with_cache
+
+    def get_block_table_key(self, flash_attn_with_kvcache_fn: Any) -> str:
+        """A function to get the name of the block table key for the given flash_attn_with_kvcache_fn. The function's
+        signature is only inspected once."""
+        if self._block_table_key is None:
+            kwarg_names = inspect.signature(flash_attn_with_kvcache_fn).parameters.keys()
+            if "block_table" in kwarg_names:
+                self._block_table_key = "block_table"
+            elif "page_table" in kwarg_names:
+                self._block_table_key = "page_table"
+            else:
+                raise ValueError(f"flash_attn_with_kvcache_fn does not have a block_table or page_table argument: {inspect.signature(flash_attn_with_kvcache_fn)}")
+        return self._block_table_key
+
 
     def search_prefix_match(self, request_id: str, prompt_ids: list[int]) -> int:
         """Searches for a prefix match in the cache for the given (prompts_ids). If one is found, we reference the
