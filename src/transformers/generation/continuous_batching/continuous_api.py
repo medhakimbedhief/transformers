@@ -244,7 +244,9 @@ class ContinuousBatchProcessor:
         self.metrics.record_queue_metrics(len(self.scheduler.active_requests), len(self.scheduler.waiting_requests))
 
         # Schedule the next batch of requests, stop if there are no requests in the batch
-        requests_in_batch, use_decode_fast_path = self.scheduler.schedule_batch(self.max_batch_tokens, self.cache.num_pages)
+        requests_in_batch, use_decode_fast_path = self.scheduler.schedule_batch(
+            self.max_batch_tokens, self.cache.num_pages
+        )
 
         # If requests_in_batch is None, it means we need to offload some requests if possible
         if requests_in_batch is None:
@@ -884,6 +886,16 @@ class ContinuousBatchingManager:
                 self.current_batch += 1
 
             while (not self.stop_event.is_set()) or batch_processor.has_pending_requests():
+                # if self.current_batch == 8000:
+                #     profiler = torch.profiler.profile(
+                #         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                #         record_shapes=True,
+                #     )
+                #     with profiler as prof:
+                #         for i in range(10):
+                #             self._inner_generation_loop(batch_processor)
+                #             self.current_batch += 1
+                #     prof.export_chrome_trace(f"batch_{self.current_batch}.json")
                 self._inner_generation_loop(batch_processor)
                 self.current_batch += 1
 

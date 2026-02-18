@@ -764,7 +764,6 @@ class ContinuousBatchingGenerationTest(unittest.TestCase):
         self.assertEqual(len(results), 2, f"Expected 2 results, but got {len(results) = }")
         self.assertEqual(results[0].generated_tokens, results[1].generated_tokens)
 
-
     # ----------------------------------Additional features tests---------------------------------- #
     #               Tests to check addtional features of CB do not change its results               #
     # --------------------------------------------------------------------------------------------- #
@@ -819,7 +818,12 @@ class ContinuousBatchingGenerationTest(unittest.TestCase):
         input_ids = [(x if isinstance(x, list) else x["input_ids"]) for x in tokenized]
 
         gen_config = GenerationConfig(
-            block_size=256, num_blocks=64, max_batch_tokens=16, do_sample=False, max_new_tokens=20, use_cuda_graph=use_cuda_graph,
+            block_size=256,
+            num_blocks=64,
+            max_batch_tokens=16,
+            do_sample=False,
+            max_new_tokens=20,
+            use_cuda_graph=use_cuda_graph,
         )
 
         # Generate with varlen path only
