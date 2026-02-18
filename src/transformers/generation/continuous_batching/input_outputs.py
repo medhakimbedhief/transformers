@@ -253,6 +253,14 @@ class ContinuousBatchingIOs:
             # Only transfer block_table for decode-only batches (when it's actually used)
             if self.use_block_table:
                 other.block_table.copy_(self.block_table, non_blocking=non_blocking)
+            # Otherwise, we transfer the read and write indices
+            else:
+                other.write_index_storage.copy_(self.write_index_storage, non_blocking=non_blocking)
+                other.read_index_storage.copy_(self.read_index_storage, non_blocking=non_blocking)
+            # Transfer the attention masks if needed
+            if self.attention_mask is not None and other.attention_mask is not None:
+                for layer_type in self.attention_mask.keys():
+                    other.attention_mask[layer_type].copy_(self.attention_mask[layer_type], non_blocking=non_blocking)
 
     @traced
     @torch.no_grad()
