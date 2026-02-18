@@ -24,7 +24,7 @@ from ...modeling_flash_attention_utils import lazy_import_paged_flash_attention
 from ...utils.metrics import traced
 from .cache import PagedAttentionCache
 from .requests import TMP_TOKEN_ID, FutureRequestState, logger
-from .utils import CpuGpuTimeTracker, CudaGraphBuffer, aligned_divide, attn_mask_is_needed, build_attention_mask
+from .utils import CpuGpuTimeTracker, CudaGraphBuffer, aligned_divide, attn_mask_is_needed, build_attention_mask, is_flash_attn_3
 
 
 @dataclass
@@ -196,16 +196,20 @@ class ContinuousBatchingIOs:
             self.attention_mask = None
 
         # We create the block table only if the config permits it
-        flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
-        create_block_table = all(
-            [
-                self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
-                self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
-                self.attention_mask is None,  # Block table is only support for flash attention
-                torch.cuda.is_available(),  # Block table is only supported on CUDA
-                flash_attn_with_kvcache is not None,  # Only supported if the `flash_attn_with_kvcache` fn is available
-            ]
-        )
+        # NOTE: block table should be available with FA2 and FA3, but there seems to be an issue with FA2 atm
+        if is_flash_attn_3(self.config._attn_implementation):
+            flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
+            create_block_table = all(
+                [
+                    self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
+                    self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
+                    torch.cuda.is_available(),  # Block table is only supported on CUDA
+                    flash_attn_with_kvcache is not None,  # Only supported if the `flash_attn_with_kvcache` fn is available
+                ]
+            )
+        else:
+            create_block_table = False
+
         # No block table == No elements in the block table tensor
         n = num_groups if create_block_table else 0
         self.block_table = torch.empty(
