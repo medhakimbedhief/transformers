@@ -40,6 +40,7 @@ class Scheduler(ABC):
         self.block_new_requests = False
         # This is to compute the cache used by a new request being scheduled
         self.cache_budget_module = None if cache.num_full_attention_groups else cache.config.sliding_window
+        self.max_decode_fast_path_length = cache.max_blocks_per_request * cache.block_size
 
     @traced
     def add_waiting_request(self, state: RequestState):
@@ -55,7 +56,7 @@ class Scheduler(ABC):
         self.waiting_requests_order.append(state.request_id)
 
     @abstractmethod
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> list[FutureRequestState] | None:
+    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
         """Schedules requests for the next batch based on available token and cache budgets. This method selects which
         requests should be processed in the current batch, considering the budgets and the scheduler's prioritization
         rules. The token_budget is the maximum number of tokens that can be processed in a batch, and the cache_budget
@@ -196,7 +197,7 @@ class Scheduler(ABC):
         cache_budget: int,
         request_ids_to_remove_from_waiting: set[str],
         safety_margin: float = 0.0,
-    ) -> tuple[list[FutureRequestState], bool]:
+    ) -> tuple[list[FutureRequestState], bool, bool]:
         """Schedules candidate requests for the current batch.
 
         This method contains the common logic shared by all schedulers: it checks token and cache budgets, allocates
@@ -205,6 +206,7 @@ class Scheduler(ABC):
         """
         scheduled_requests = []
         one_allocation_failed = False
+        decode_fast_path = True
         safety_margins = safety_margin * self.cache.num_blocks
 
         for state in candidates:
@@ -246,6 +248,9 @@ class Scheduler(ABC):
             self._schedule_request(state, request_tokens, token_budget, request_ids_to_remove_from_waiting)
             request_len = len(state.tokens_to_process)  # it may change after scheduling
 
+            # The decode fast path is only used if the request is a single token and its length is less than the max blocks per request
+            decode_fast_path &= (request_len == 1 and state.position_offset < self.max_decode_fast_path_length)
+
             # Update the token and cache budgets
             token_budget -= request_len
             cache_budget -= cache_needed
@@ -272,7 +277,7 @@ class Scheduler(ABC):
             if token_budget == 0 or cache_budget == 0:
                 break
 
-        return scheduled_requests, one_allocation_failed
+        return scheduled_requests, one_allocation_failed, decode_fast_path
 
     def _cleanup_waiting_queue(self, request_ids_to_remove_from_waiting: set[str]) -> None:
         """Removes processed requests from the waiting queue order."""
@@ -297,7 +302,7 @@ class FIFOScheduler(Scheduler):
         self.safety_margin = safety_margin
 
     @traced
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> list[FutureRequestState] | None:
+    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
         priority_states: list[RequestState] = []
         second_priority_states: list[RequestState] = []
 
@@ -314,7 +319,7 @@ class FIFOScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed = self._process_candidates(
+        scheduled_requests, one_allocation_failed, decode_fast_path = self._process_candidates(
             candidates,
             token_budget,
             cache_budget,
@@ -327,9 +332,9 @@ class FIFOScheduler(Scheduler):
 
         # If no requests were scheduled and the cache is full, we signal it by returning None
         if not scheduled_requests and one_allocation_failed:
-            return None
+            return None, decode_fast_path
 
-        return scheduled_requests
+        return scheduled_requests, decode_fast_path
 
 
 # FIXME: prioritize adding from waiting reqs before scheduling `RequestStatus.DECODING` when cache space allows it
@@ -341,7 +346,7 @@ class PrefillFirstScheduler(Scheduler):
     decoding requests."""
 
     @traced
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> list[FutureRequestState] | None:
+    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
         priority_states: list[RequestState] = []
         second_priority_states: list[RequestState] = []
 
@@ -359,7 +364,7 @@ class PrefillFirstScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed = self._process_candidates(
+        scheduled_requests, one_allocation_failed, decode_fast_path = self._process_candidates(
             candidates,
             token_budget,
             cache_budget,
@@ -372,9 +377,9 @@ class PrefillFirstScheduler(Scheduler):
 
         # If no requests were scheduled and the cache is full, we signal it by returning None
         if not scheduled_requests and one_allocation_failed:
-            return None
+            return None, decode_fast_path
 
-        return scheduled_requests
+        return scheduled_requests, decode_fast_path
 
 
 SCHEDULER_MAPPING = {

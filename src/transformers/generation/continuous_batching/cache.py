@@ -210,6 +210,19 @@ class PagedAttentionCache:
             f"{self.max_batch_tokens = } {num_attention_masks = }"
         )
 
+        # If max_blocks_per_request is not set, we only use a block table if async batching is on (most efficient then)
+        max_blocks_per_request = getattr(generation_config, "max_blocks_per_request", None)
+        if max_blocks_per_request is None:
+            if use_async:
+                max_blocks_per_request = 64  # 64 * 256 = 16384 tokens for the decode fast path by default
+                logger.info(
+                    f"max_blocks_per_request was not set, using {max_blocks_per_request}. This means max sequence "
+                    f"lengthfor the decode fast path is {max_blocks_per_request * self.block_size}."
+                )
+            else:
+                max_blocks_per_request = 0
+        self.max_blocks_per_request = max_blocks_per_request
+
         # Initialize the cache
         self.key_cache: list[torch.Tensor] = []
         self.value_cache: list[torch.Tensor] = []

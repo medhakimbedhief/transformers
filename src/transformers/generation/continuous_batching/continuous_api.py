@@ -244,7 +244,7 @@ class ContinuousBatchProcessor:
         self.metrics.record_queue_metrics(len(self.scheduler.active_requests), len(self.scheduler.waiting_requests))
 
         # Schedule the next batch of requests, stop if there are no requests in the batch
-        requests_in_batch = self.scheduler.schedule_batch(self.max_batch_tokens, self.cache.num_pages)
+        requests_in_batch, use_decode_fast_path = self.scheduler.schedule_batch(self.max_batch_tokens, self.cache.num_pages)
 
         # If requests_in_batch is None, it means we need to offload some requests if possible
         if requests_in_batch is None:
@@ -259,7 +259,7 @@ class ContinuousBatchProcessor:
 
         # Otherwise, we can continue with the non-empty batch
         self.metrics.record_batch_metrics(requests_in_batch)
-        self.inputs_and_outputs.prepare_batch_tensors(requests_in_batch)
+        self.inputs_and_outputs.prepare_batch_tensors(requests_in_batch, use_decode_fast_path)
 
         # Record the memory metrics of the KV cache
         self.metrics.record_kv_cache_memory_metrics(self.cache)

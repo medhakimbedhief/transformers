@@ -85,7 +85,7 @@ def paged_attention_forward(
         v_cache = cache.value_cache[layer_idx_in_group].view(
             -1, cache.block_size, cache.num_key_value_heads, cache.head_dim
         )
-        # Reshape Q, K, V from [1, num_kv_heads, batch_size, head_dim] to [batch_size, 1, num_kv_heads, head_dim]
+        # Reshape Q, K, V from [1, num_*_heads, batch_size, head_dim] to [batch_size, 1, num_*_heads, head_dim]
         q = q.permute(2, 0, 1, 3).contiguous()
         k = k.permute(2, 0, 1, 3).contiguous()
         v = v.permute(2, 0, 1, 3).contiguous()

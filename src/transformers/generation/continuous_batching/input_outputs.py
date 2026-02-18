@@ -201,7 +201,7 @@ class ContinuousBatchingIOs:
             flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
             create_block_table = all(
                 [
-                    self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
+                    self.cache.max_blocks_per_request > 0,
                     self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
                     torch.cuda.is_available(),  # Block table is only supported on CUDA
                     flash_attn_with_kvcache is not None,  # The `flash_attn_with_kvcache` fn is needed
@@ -318,7 +318,7 @@ class ContinuousBatchingIOs:
         return requests_in_batch, new_tokens
 
     @traced
-    def prepare_batch_tensors(self, requests_in_batch: list[FutureRequestState]) -> None:
+    def prepare_batch_tensors(self, requests_in_batch: list[FutureRequestState], use_decode_fast_path: bool) -> None:
         """Prepare tensors and metadata for the next model forward pass, using the given requests as data. This method:
 
         1. Resets the static tensors from the previous batch
@@ -336,12 +336,7 @@ class ContinuousBatchingIOs:
 
         # Determine if this is a decode-only batch upfront (all requests have query_length == 1)
         # This is needed to decide whether to use block_table or read/write indices
-        if self.block_table.numel() > 0:
-            self.use_block_table = all(
-                len(fs.state.tokens_to_process) == 1 for fs in requests_in_batch
-            )  # TODO: take care of this step in the CPU step
-        else:
-            self.use_block_table = False
+        self.use_block_table = use_decode_fast_path and self.block_table.numel() > 0
 
         # Reset the static tensors used for storage
         self._reset_static_tensors()  # FIXME: why does this make the generation faster?
@@ -626,9 +621,9 @@ class ContinuousBatchingAsyncIOs:
         return self.io_pairs[self.current_pair].host_io.get_actual_lengths()
 
     # The prepare_batch_tensor method also has to prepare the carry over ids
-    def prepare_batch_tensors(self, requests_in_batch: list[FutureRequestState]) -> None:
+    def prepare_batch_tensors(self, requests_in_batch: list[FutureRequestState], use_decode_fast_path: bool) -> None:
         io_pair = self.io_pairs[self.current_pair]
-        io_pair.host_io.prepare_batch_tensors(requests_in_batch)
+        io_pair.host_io.prepare_batch_tensors(requests_in_batch, use_decode_fast_path)
         io_pair.host_io.carry_over_ids.copy_(self.infer_carry_over_ids())
 
     def infer_carry_over_ids(self) -> torch.Tensor:
