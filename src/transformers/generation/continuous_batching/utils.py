@@ -119,6 +119,8 @@ def attn_mask_is_needed(config: PretrainedConfig) -> bool:
 
 
 def is_flash_attn_3(attn_implementation: str) -> bool:
+    if not isinstance(attn_implementation, str):
+        return False
     return re.match(r".*flash[ ._-]?(attention|attn)[ ._-]?3", attn_implementation) is not None
 
 
