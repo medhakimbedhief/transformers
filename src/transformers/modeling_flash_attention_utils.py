@@ -171,7 +171,9 @@ def lazy_import_flash_attention(implementation: str | None, attention_wrapper: C
     if implementation is not None and _loaded_implementation != implementation:
         _loaded_implementation = implementation
 
-        _flash_fn, _flash_varlen_fn, _flash_with_kvcache_fn, _pad_fn, _unpad_fn = _lazy_imports(implementation, attention_wrapper)
+        _flash_fn, _flash_varlen_fn, _flash_with_kvcache_fn, _pad_fn, _unpad_fn = _lazy_imports(
+            implementation, attention_wrapper
+        )
         _process_flash_kwargs_fn = _lazy_define_process_function(_flash_varlen_fn)
 
     return (_flash_fn, _flash_varlen_fn, _flash_with_kvcache_fn, _pad_fn, _unpad_fn), _process_flash_kwargs_fn

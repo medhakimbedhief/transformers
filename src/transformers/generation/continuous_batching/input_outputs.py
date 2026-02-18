@@ -197,17 +197,22 @@ class ContinuousBatchingIOs:
 
         # We create the block table only if the config permits it
         flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
-        create_block_table = all([
-            self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
-            self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
-            self.attention_mask is None,  # Block table is only support for flash attention
-            torch.cuda.is_available(),  # Block table is only supported on CUDA
-            flash_attn_with_kvcache is not None,  # Block table is only supported if flash_attn_with_kvcache is available
-        ])
+        create_block_table = all(
+            [
+                self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
+                self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
+                self.attention_mask is None,  # Block table is only support for flash attention
+                torch.cuda.is_available(),  # Block table is only supported on CUDA
+                flash_attn_with_kvcache is not None,  # Only supported if the `flash_attn_with_kvcache` fn is available
+            ]
+        )
         # No block table == No elements in the block table tensor
         n = num_groups if create_block_table else 0
         self.block_table = torch.empty(
-            (n, max_batch_tokens, self.cache.max_blocks_per_request), dtype=torch.int32, device=self.device, pin_memory=pin_memory
+            (n, max_batch_tokens, self.cache.max_blocks_per_request),
+            dtype=torch.int32,
+            device=self.device,
+            pin_memory=pin_memory,
         )
 
         # For other kwargs, we need a list of tensors with as many tensors as there are groups
@@ -328,7 +333,9 @@ class ContinuousBatchingIOs:
         # Determine if this is a decode-only batch upfront (all requests have query_length == 1)
         # This is needed to decide whether to use block_table or read/write indices
         if self.block_table.numel() > 0:
-            self.use_block_table = all(len(fs.state.tokens_to_process) == 1 for fs in requests_in_batch) # TODO: take care of this step in the CPU step
+            self.use_block_table = all(
+                len(fs.state.tokens_to_process) == 1 for fs in requests_in_batch
+            )  # TODO: take care of this step in the CPU step
         else:
             self.use_block_table = False
 
@@ -381,7 +388,9 @@ class ContinuousBatchingIOs:
 
             # We extend the read and write indices for the cache, or fill the block table for decode-only batches
             if self.use_block_table:
-                self.cache.fill_block_table(state.request_id, past_length, query_length, self.block_table[:, self.actual_batch_size-1, :])
+                self.cache.fill_block_table(
+                    state.request_id, past_length, query_length, self.block_table[:, self.actual_batch_size - 1, :]
+                )
             else:
                 self.cache.extend_read_and_write_indices(
                     state.request_id, past_length, query_length, read_index, write_index

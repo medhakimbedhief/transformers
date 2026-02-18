@@ -314,7 +314,9 @@ class PagedAttentionCache:
             indices = cm.get_write_indices(request_id, past_length, query_length)
             write_indices.extend(indices)
 
-    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+    def fill_block_table(
+        self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor
+    ) -> None:
         for i, cm in enumerate(self.group_cache_managers):
             cm.fill_block_table(request_id, past_length, query_length, block_table[i])
 
@@ -393,7 +395,9 @@ class PagedAttentionCache:
             elif "page_table" in kwarg_names:
                 self._block_table_key = "page_table"
             else:
-                raise ValueError(f"flash_attn_with_kvcache_fn does not have a block_table or page_table argument: {inspect.signature(flash_attn_with_kvcache_fn)}")
+                raise ValueError(
+                    f"flash_attn_with_kvcache_fn does not have a block_table or page_table argument: {inspect.signature(flash_attn_with_kvcache_fn)}"
+                )
         return self._block_table_key
 
     def search_prefix_match(self, request_id: str, prompt_ids: list[int]) -> int:

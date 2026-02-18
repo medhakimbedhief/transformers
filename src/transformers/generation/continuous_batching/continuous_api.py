@@ -401,7 +401,7 @@ class ContinuousBatchProcessor:
                 padded_read_index_size = pad_to_interval(
                     size=max(actual_read_sizes),
                     interval_size=self.kv_padding_interval_size,
-                    max_value=self.cache.num_pages
+                    max_value=self.cache.num_pages,
                 )
         else:
             padded_q, padded_read_index_size = 0, 0

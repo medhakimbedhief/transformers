@@ -137,6 +137,7 @@ def npu_flash_attn_varlen_func(
 
     return output
 
+
 # This function is not implemented but should never be called because block table is not used on NPU
 def npu_flash_attn_with_kvcache():
     raise NotImplementedError("npu_flash_attn_with_kvcache is not implemented")

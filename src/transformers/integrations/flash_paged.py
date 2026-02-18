@@ -36,7 +36,9 @@ def paged_attention_forward(
             If provided, uses flash_attn_with_kvcache for fused attention + cache update.
     """
     # Retrieve the flash attention functions
-    flash_attn_varlen_func, flash_attn_with_kvcache = lazy_import_paged_flash_attention(module.config._attn_implementation)
+    flash_attn_varlen_func, flash_attn_with_kvcache = lazy_import_paged_flash_attention(
+        module.config._attn_implementation
+    )
 
     # Retrieve the cumulative sequence lengths for the current layer
     sliding_window = (-1, -1) if not getattr(module, "sliding_window", False) else (module.sliding_window - 1, 0)
@@ -77,8 +79,12 @@ def paged_attention_forward(
         # Get layer group index for this layer
         group_idx, layer_idx_in_group = cache.layer_index_to_group_indices[module.layer_idx]
         # KV cache shape: [num_pages, num_kv_heads, head_dim] -> [num_blocks, block_size, num_kv_heads, head_dim]
-        k_cache = cache.key_cache[layer_idx_in_group].view(-1, cache.block_size, cache.num_key_value_heads, cache.head_dim)
-        v_cache = cache.value_cache[layer_idx_in_group].view(-1, cache.block_size, cache.num_key_value_heads, cache.head_dim)
+        k_cache = cache.key_cache[layer_idx_in_group].view(
+            -1, cache.block_size, cache.num_key_value_heads, cache.head_dim
+        )
+        v_cache = cache.value_cache[layer_idx_in_group].view(
+            -1, cache.block_size, cache.num_key_value_heads, cache.head_dim
+        )
         # Reshape Q, K, V from [1, num_kv_heads, batch_size, head_dim] to [batch_size, 1, num_kv_heads, head_dim]
         q = q.permute(2, 0, 1, 3).contiguous()
         k = k.permute(2, 0, 1, 3).contiguous()
@@ -86,7 +92,7 @@ def paged_attention_forward(
         # Compute cache_seqlens from cu_seq_lens_k (current cache length BEFORE adding new tokens)
         # cu_seq_lens_k is cumulative, so seqlens[i] = cu_seq_lens_k[i+1] - cu_seq_lens_k[i] - 1 (subtract 1 for the new token)
         batch_size = k.size(0)
-        cache_seqlens = (cu_seq_lens_k[1:batch_size + 1] - cu_seq_lens_k[:batch_size] - 1).to(torch.int32)
+        cache_seqlens = (cu_seq_lens_k[1 : batch_size + 1] - cu_seq_lens_k[:batch_size] - 1).to(torch.int32)
         # The arg name for the block table is not the same in VLLM's kernel and Tri Dao's kernel, so we need to parse it
         flash_kwargs = {cache.get_block_table_key(flash_attn_with_kvcache): block_table[group_idx]}
         if "s_aux" in kwargs:

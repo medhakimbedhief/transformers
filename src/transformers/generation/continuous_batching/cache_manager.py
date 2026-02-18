@@ -311,7 +311,9 @@ class CacheAllocator(ABC):
         """Returns the physical indices of where to write request_id's cache in the cache tensor."""
 
     @abstractmethod
-    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+    def fill_block_table(
+        self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor
+    ) -> None:
         """Fills the block table for a given request_id, past_length and query_length."""
 
     def fork_blocks(
@@ -419,7 +421,9 @@ class FullAttentionCacheAllocator(CacheAllocator):
             physical_indices.extend(range(block_start + local_start, block_start + local_end))
         return physical_indices
 
-    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+    def fill_block_table(
+        self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor
+    ) -> None:
         """Fills the block table for a given request_id, past_length and query_length."""
         request_blocks = self.block_table.get(request_id)
         if request_blocks is None:
@@ -427,8 +431,11 @@ class FullAttentionCacheAllocator(CacheAllocator):
         total_length = past_length + query_length
         # Use ceiling division to include the partial block at the end
         num_blocks_needed = (total_length + self.block_size - 1) // self.block_size
-        block_table[:num_blocks_needed] = torch.tensor(request_blocks[:num_blocks_needed], device=block_table.device, dtype=block_table.dtype)
+        block_table[:num_blocks_needed] = torch.tensor(
+            request_blocks[:num_blocks_needed], device=block_table.device, dtype=block_table.dtype
+        )
         # TODO: this creates a lot of H2D transfers when not using async batching, but we will update to always using an IO pair in the future
+
 
 class SlidingAttentionCacheAllocator(CacheAllocator):
     """Cache manager for sliding window attention layers."""
@@ -517,5 +524,7 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         return physical_indices
 
     # TODO: implement this
-    def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
+    def fill_block_table(
+        self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor
+    ) -> None:
         raise NotImplementedError("Sliding window attention layers do not support block table")
