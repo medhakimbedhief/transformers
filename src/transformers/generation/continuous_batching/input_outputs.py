@@ -204,7 +204,7 @@ class ContinuousBatchingIOs:
                     self.cache.max_blocks_per_request > 0,  # TODO: make this configurable
                     self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
                     torch.cuda.is_available(),  # Block table is only supported on CUDA
-                    flash_attn_with_kvcache is not None,  # Only supported if the `flash_attn_with_kvcache` fn is available
+                    flash_attn_with_kvcache is not None,  # The `flash_attn_with_kvcache` fn is needed
                 ]
             )
         else:
