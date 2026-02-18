@@ -102,7 +102,7 @@ def paged_attention_forward(
             softmax_scale=module.scaling,
             causal=True,
             window_size=sliding_window,
-            **custom_kwargs,
+            **flash_kwargs,
         )
         if isinstance(attn_output, tuple):
             attn_output = attn_output[0]

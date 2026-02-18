@@ -31,13 +31,13 @@ class CudaGraphBuffer:
         self.max_size = max_size
         self._storage: OrderedDict[tuple[int, int], torch.cuda.CUDAGraph] = OrderedDict()
 
-    def get_graph(self, key: tuple[int, int]) -> torch.cuda.CUDAGraph | None:
-        graph = self._storage.get(key)
+    def get_graph(self, q_len: int, kv_len: int) -> torch.cuda.CUDAGraph | None:
+        graph = self._storage.get((q_len, kv_len))
         if graph is not None:
-            self._storage.move_to_end(key)
+            self._storage.move_to_end((q_len, kv_len))
         return graph
 
-    def set_graph(self, key: tuple[int, int], graph: torch.cuda.CUDAGraph) -> None:
+    def set_graph(self, q_len: int, kv_len: int, graph: torch.cuda.CUDAGraph) -> None:
         if len(self._storage) >= self.max_size:
             evicted_key, evicted_graph = self._storage.popitem(last=False)
             logger.info(f"Evicting graph for {evicted_key = }")

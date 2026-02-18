@@ -393,7 +393,7 @@ class ContinuousBatchProcessor:
             # In all cases, we pad the queries
             actual_query_length, _, _, actual_read_sizes, _ = self.inputs_and_outputs.get_actual_lengths()
             padded_q = pad_to_interval(actual_query_length, self.q_padding_interval_size, self.max_batch_tokens)
-            # If the block table is used, we only pad the queries
+            # If the block table is used, we only pad the queries (padded_read_index_size is never 0 in the other case)
             if self.inputs_and_outputs.use_block_table:
                 padded_read_index_size = 0
             # Otherwise, we pad the read / write indices
@@ -416,15 +416,14 @@ class ContinuousBatchProcessor:
 
         # Otherwise, we use create or replay the graph
         else:
-            key = (padded_q, padded_read_index_size)
-            graph = self.inputs_and_outputs.graphs.get_graph(key)
+            graph = self.inputs_and_outputs.graphs.get_graph(padded_q, padded_read_index_size)
             # Case: the graph already exists, so we replay it
             if graph is not None:
                 with torch.cuda.stream(compute_stream):
                     graph.replay()
             # Otherwise, the graph does not exist, so we create it
             else:
-                logger.info(f"Creating graph for {key = }")
+                logger.info(f"Creating graph for {(padded_q, padded_read_index_size) = }")
                 # TODO: remove this once we are sure there are no race conditions
                 # compute_stream.wait_stream(torch.cuda.current_stream())
                 # Warmup
@@ -436,7 +435,7 @@ class ContinuousBatchProcessor:
                 with torch.cuda.graph(graph, stream=compute_stream):
                     self._forward_process_and_sample(model, batch_data, logit_processor, do_sample)
                 # Store
-                self.inputs_and_outputs.graphs.set_graph(key, graph)
+                self.inputs_and_outputs.graphs.set_graph(padded_q, padded_read_index_size, graph)
 
         # In any case, we transfer the outputs to the host
         self.inputs_and_outputs.retrieve_device_outputs()

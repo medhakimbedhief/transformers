@@ -204,6 +204,7 @@ class ContinuousBatchingIOs:
             torch.cuda.is_available(),  # Block table is only supported on CUDA
             flash_attn_with_kvcache is not None,  # Block table is only supported if flash_attn_with_kvcache is available
         ])
+        # No block table == No elements in the block table tensor
         n = num_groups if create_block_table else 0
         self.block_table = torch.empty(
             (n, max_batch_tokens, self.cache.max_blocks_per_request), dtype=torch.int32, device=self.device, pin_memory=pin_memory
@@ -254,7 +255,6 @@ class ContinuousBatchingIOs:
         # Compute the slice to reset
         q_len = self.write_index_storage.size(-1) if full_reset else self.actual_query_length
         k_len = self.read_index_storage.size(-1) if full_reset else self.actual_key_length
-        b_size = self.write_index_storage.size(1) if full_reset else self.actual_batch_size
 
         # Reset the attributes part of the bulk input tensor in one kernel
         self._bulk_input_tensor[:, : q_len + 1].zero_()
@@ -274,9 +274,10 @@ class ContinuousBatchingIOs:
         self.write_index_storage[:, :q_len].fill_(-2)  # -1 is used to let the cache where new states go
         self.read_index_storage[:, : q_len + k_len].fill_(-2)  # same
 
-        # Only reset block_table if it was used in the previous batch (use_block_table still holds previous value)
+        # Only reset block_table if it was used in the previous batch (use_block_table still holds previous value). In
+        # that case, q_len == b_size because we only use the block table for decode-only batches.
         if self.use_block_table:
-            self.block_table[:, :b_size].fill_(-1)
+            self.block_table[:, :q_len].fill_(-1)
 
     # These getter function help create a common interface for the sync and async IOs
     def get_cumulative_seqlens(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

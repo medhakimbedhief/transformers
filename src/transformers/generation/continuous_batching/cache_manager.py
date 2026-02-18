@@ -428,7 +428,7 @@ class FullAttentionCacheAllocator(CacheAllocator):
         # Use ceiling division to include the partial block at the end
         num_blocks_needed = (total_length + self.block_size - 1) // self.block_size
         block_table[:num_blocks_needed] = torch.tensor(request_blocks[:num_blocks_needed], device=block_table.device, dtype=block_table.dtype)
-
+        # TODO: this creates a lot of H2D transfers when not using async batching, but we will update to always using an IO pair in the future
 
 class SlidingAttentionCacheAllocator(CacheAllocator):
     """Cache manager for sliding window attention layers."""
@@ -516,5 +516,6 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
             physical_indices = [-1] * padding_length + physical_indices
         return physical_indices
 
+    # TODO: implement this
     def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
         raise NotImplementedError("Sliding window attention layers do not support block table")

@@ -140,7 +140,7 @@ class PagedAttentionCache:
         self.config = config
         self.dtype = dtype
         self.device = device
-        self.max_blocks_per_request = getattr(generation_config, "max_blocks_per_request", 4 * 16)  # TODO: make this configurable
+        self.max_blocks_per_request = getattr(generation_config, "max_blocks_per_request", 64)
 
         # Extract model dimensions
         kv_heads = getattr(config, "num_key_value_heads", None)
@@ -315,7 +315,7 @@ class PagedAttentionCache:
             write_indices.extend(indices)
 
     def fill_block_table(self, request_id: str, past_length: int, query_length: int, block_table: torch.Tensor) -> None:
-        for i,cm in enumerate(self.group_cache_managers):
+        for i, cm in enumerate(self.group_cache_managers):
             cm.fill_block_table(request_id, past_length, query_length, block_table[i])
 
     @traced
@@ -395,7 +395,6 @@ class PagedAttentionCache:
             else:
                 raise ValueError(f"flash_attn_with_kvcache_fn does not have a block_table or page_table argument: {inspect.signature(flash_attn_with_kvcache_fn)}")
         return self._block_table_key
-
 
     def search_prefix_match(self, request_id: str, prompt_ids: list[int]) -> int:
         """Searches for a prefix match in the cache for the given (prompts_ids). If one is found, we reference the
