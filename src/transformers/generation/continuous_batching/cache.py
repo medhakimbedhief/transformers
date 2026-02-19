@@ -217,7 +217,7 @@ class PagedAttentionCache:
                 max_blocks_per_request = 64  # 64 * 256 = 16384 tokens for the decode fast path by default
                 logger.info(
                     f"max_blocks_per_request was not set, using {max_blocks_per_request}. This means max sequence "
-                    f"lengthfor the decode fast path is {max_blocks_per_request * self.block_size}."
+                    f"length for the decode fast path is {max_blocks_per_request * self.block_size}."
                 )
             else:
                 max_blocks_per_request = 0
