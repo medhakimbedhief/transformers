@@ -148,7 +148,7 @@ class PagedAttentionCache:
         head_dim = getattr(config, "head_dim", None)
         self.head_dim: int = head_dim if head_dim is not None else config.hidden_size // config.num_attention_heads
 
-        # Extract cache dimensions
+        # Extract cache dimensions. Default used to be 32, now it's 256 to be compatible with flash_with_kvcache.
         self.block_size = getattr(generation_config, "block_size", 256)
 
         # Group layers depending on the attention mix
