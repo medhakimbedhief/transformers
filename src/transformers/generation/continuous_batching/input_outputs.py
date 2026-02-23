@@ -24,7 +24,14 @@ from ...modeling_flash_attention_utils import lazy_import_paged_flash_attention
 from ...utils.metrics import traced
 from .cache import PagedAttentionCache
 from .requests import TMP_TOKEN_ID, FutureRequestState, logger
-from .utils import CpuGpuTimeTracker, CudaGraphBuffer, aligned_divide, attn_mask_is_needed, build_attention_mask, is_flash_attn_3
+from .utils import (
+    CpuGpuTimeTracker,
+    CudaGraphBuffer,
+    aligned_divide,
+    attn_mask_is_needed,
+    build_attention_mask,
+    is_flash_attn_3,
+)
 
 
 @dataclass
@@ -245,11 +252,6 @@ class ContinuousBatchingIOs:
         # Transfer static tensors
         with torch.cuda.stream(stream):
             other._bulk_input_tensor.copy_(self._bulk_input_tensor, non_blocking=non_blocking)  # fast bulk transfer
-            other.write_index_storage.copy_(self.write_index_storage, non_blocking=non_blocking)
-            other.read_index_storage.copy_(self.read_index_storage, non_blocking=non_blocking)
-            if self.attention_mask is not None and other.attention_mask is not None:
-                for layer_type in self.attention_mask.keys():
-                    other.attention_mask[layer_type].copy_(self.attention_mask[layer_type], non_blocking=non_blocking)
             # Only transfer block_table for decode-only batches (when it's actually used)
             if self.use_block_table:
                 other.block_table.copy_(self.block_table, non_blocking=non_blocking)
@@ -513,7 +515,7 @@ class ContinuousBatchingIOs:
             self.time_tracker.end_cpu_span()
             self.time_tracker.start_gpu_span()
 
-        kwargs_dict = kwargs.asdict()  # TODO: this is imperfect, check if there is no better way to juggle dict / dataclass
+        kwargs_dict = kwargs.asdict()
         if self.use_block_table:
             kwargs_dict["block_table"] = self.block_table[:, :q_len]
         return kwargs_dict

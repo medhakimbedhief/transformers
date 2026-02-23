@@ -249,7 +249,7 @@ class Scheduler(ABC):
             request_len = len(state.tokens_to_process)  # it may change after scheduling
 
             # The decode fast path is only used if the request is a single token and its length is less than the max blocks per request
-            decode_fast_path &= (request_len == 1 and state.position_offset < self.max_decode_fast_path_length)
+            decode_fast_path &= request_len == 1 and state.position_offset < self.max_decode_fast_path_length
 
             # Update the token and cache budgets
             token_budget -= request_len

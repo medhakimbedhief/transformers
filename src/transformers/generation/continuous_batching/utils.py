@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from math import ceil
 from time import perf_counter
 
