@@ -345,7 +345,7 @@ class ContinuousBatchingIOs:
         self.use_block_table = use_decode_fast_path and self.block_table.numel() > 0
         # Memoize the length of Q and KV
         self.num_q_tokens = num_q_tokens
-        self.max_kv_read = 0 if use_decode_fast_path else max_kv_read  # No need to track KV read for decode-fast-path
+        self.max_kv_read = 0 if self.use_block_table else max_kv_read  # No need to track KV read for decode-fast-path
         self.true_batch_size = len(requests_in_batch)
         # Reset the static storage that is going to be used for the next batch
         self._reset_static_tensors()
