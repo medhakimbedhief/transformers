@@ -38,11 +38,15 @@ class CudaGraphBuffer:
             self._storage.move_to_end((q_len, kv_len))
         return graph
 
-    def set_graph(self, q_len: int, kv_len: int, graph: torch.cuda.CUDAGraph) -> None:
-        if len(self._storage) >= self.max_size:
+    def plan_for_new_graph(self) -> None:
+        while len(self._storage) >= self.max_size:
             evicted_key, evicted_graph = self._storage.popitem(last=False)
             logger.info(f"Evicting graph for {evicted_key = }")
             evicted_graph.reset()
+
+    def set_graph(self, q_len: int, kv_len: int, graph: torch.cuda.CUDAGraph) -> None:
+        # In our use case, this should not have any effect because we plan for a new graph before it is captured
+        self.plan_for_new_graph()
         self._storage[(q_len, kv_len)] = graph
 
 

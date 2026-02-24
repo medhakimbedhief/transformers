@@ -512,7 +512,9 @@ class ContinuousBatchingIOs:
 
     def get_graph(self) -> torch.cuda.CUDAGraph | None:
         graph = self.graphs.get_graph(self.num_q_tokens, self.max_kv_read)
-        if graph is None:  # this is a bit shoehorned in, but it is useful to have a log before graph capture
+        # If this point is reached, it means the next step will be a new graph capture
+        if graph is None:
+            self.graphs.plan_for_new_graph()
             logger.info(f"Creating graph for {(self.num_q_tokens, self.max_kv_read) = }")
         return graph
 
