@@ -183,9 +183,8 @@ class RequestState:
         return self._timestamps if self.record_timestamps else None
 
     def log_end_of_request(self):
-        total_len = len(self.initial_tokens) + len(self.generated_tokens)
-        prefill_len = len(self.initial_tokens) if self._true_initial_tokens == 0 else self._true_initial_tokens
-        decode_len = total_len - prefill_len
+        prefill_len = len(self.initial_tokens)
+        decode_len = self.generated_len()
         start_time = self.lifespan[0] - self.created_time
         end_time = self.lifespan[1] - self.created_time
         logger.info(
