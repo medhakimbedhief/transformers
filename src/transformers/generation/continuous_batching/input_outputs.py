@@ -287,7 +287,9 @@ class ContinuousBatchingIOs:
         for layer_type in self.cumulative_seqlens_k:
             self.max_seqlen_k[layer_type] = 0
             if self.attention_mask is not None:
-                self.attention_mask[layer_type][:, :, :q_len, :q_len + kv_len].fill_(torch.finfo(self.model_dtype).min)
+                self.attention_mask[layer_type][:, :, :q_len, : q_len + kv_len].fill_(
+                    torch.finfo(self.model_dtype).min
+                )
 
         # If this is a full reset, we reset every tensors
         if full_reset:
@@ -324,7 +326,11 @@ class ContinuousBatchingIOs:
 
     @traced
     def prepare_batch_tensors(
-        self, requests_in_batch: list[FutureRequestState], use_decode_fast_path: bool, num_q_tokens: int, max_kv_read: int
+        self,
+        requests_in_batch: list[FutureRequestState],
+        use_decode_fast_path: bool,
+        num_q_tokens: int,
+        max_kv_read: int,
     ) -> None:
         """Prepare tensors and metadata for the next model forward pass, using the given requests as data. This method:
 
@@ -622,7 +628,11 @@ class ContinuousBatchingAsyncIOs:
 
     # The prepare_batch_tensor method also has to prepare the carry over ids
     def prepare_batch_tensors(
-        self, requests_in_batch: list[FutureRequestState], use_decode_fast_path: bool, num_q_tokens: int, max_kv_read: int
+        self,
+        requests_in_batch: list[FutureRequestState],
+        use_decode_fast_path: bool,
+        num_q_tokens: int,
+        max_kv_read: int,
     ) -> None:
         io_pair = self.io_pairs[self.current_pair]
         io_pair.host_io.prepare_batch_tensors(requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read)

@@ -327,12 +327,14 @@ class FIFOScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = self._process_candidates(
-            candidates,
-            token_budget,
-            cache_budget,
-            request_ids_to_remove_from_waiting,
-            safety_margin=self.safety_margin,
+        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = (
+            self._process_candidates(
+                candidates,
+                token_budget,
+                cache_budget,
+                request_ids_to_remove_from_waiting,
+                safety_margin=self.safety_margin,
+            )
         )
 
         # We remove waiting requests before checking requests were scheduled, because there might have been prefill matches
@@ -374,12 +376,14 @@ class PrefillFirstScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = self._process_candidates(
-            candidates,
-            token_budget,
-            cache_budget,
-            request_ids_to_remove_from_waiting,
-            safety_margin=0.0,
+        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = (
+            self._process_candidates(
+                candidates,
+                token_budget,
+                cache_budget,
+                request_ids_to_remove_from_waiting,
+                safety_margin=0.0,
+            )
         )
 
         # We remove waiting requests before checking requests were scheduled, because there might have been prefill matches

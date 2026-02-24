@@ -271,7 +271,9 @@ class ContinuousBatchProcessor:
             num_q_tokens = pad_to_interval(num_q_tokens, self.q_padding_interval_size, self.max_batch_tokens)
             max_kv_read = pad_to_interval(max_kv_read, self.kv_padding_interval_size, self.cache.num_pages)
 
-        self.inputs_and_outputs.prepare_batch_tensors(requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read)
+        self.inputs_and_outputs.prepare_batch_tensors(
+            requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read
+        )
         self.metrics.record_kv_cache_memory_metrics(self.cache)
         return True
 
