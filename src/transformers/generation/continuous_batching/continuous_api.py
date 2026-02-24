@@ -244,10 +244,9 @@ class ContinuousBatchProcessor:
         self.metrics.record_queue_metrics(len(self.scheduler.active_requests), len(self.scheduler.waiting_requests))
 
         # Schedule the next batch of requests, stop if there are no requests in the batch
-        requests_in_batch, use_decode_fast_path = self.scheduler.schedule_batch(
+        requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read = self.scheduler.schedule_batch(
             self.max_batch_tokens, self.cache.num_pages
         )
-
         # If requests_in_batch is None, it means we need to offload some requests if possible
         if requests_in_batch is None:
             if len(self.scheduler.active_requests) > 1:
@@ -259,19 +258,21 @@ class ContinuousBatchProcessor:
         if not requests_in_batch:
             return False
 
-        # Otherwise, we can continue with the non-empty batch
+        # Otherwise, we can continue with the non-empty batch and log in the dimensions before padding
         self.metrics.record_batch_metrics(requests_in_batch)
-        self.inputs_and_outputs.prepare_batch_tensors(requests_in_batch, use_decode_fast_path)
+        logger.debug(
+            f"Scheduled: {len(requests_in_batch)}, Waiting: {len(self.scheduler.waiting_requests)}, "
+            f"Active: {len(self.scheduler.active_requests)}. cum Q: {num_q_tokens}. "
+            f"cum KV: {max_kv_read}, free blocks: {self.cache.get_num_free_blocks()}"
+        )
 
-        # Record the memory metrics of the KV cache
+        # If inputs are static sized, eg. for compile, we find the padded sizes of the queries and keys/values
+        if self._pad_inputs:
+            num_q_tokens = pad_to_interval(num_q_tokens, self.q_padding_interval_size, self.max_batch_tokens)
+            max_kv_read = pad_to_interval(max_kv_read, self.kv_padding_interval_size, self.cache.num_pages)
+
+        self.inputs_and_outputs.prepare_batch_tensors(requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read)
         self.metrics.record_kv_cache_memory_metrics(self.cache)
-        if logger.isEnabledFor(logging.DEBUG):
-            actual_query_length, actual_key_length = self.inputs_and_outputs.get_actual_lengths()[:2]
-            logger.debug(
-                f"Scheduled: {len(requests_in_batch)}, Waiting: {len(self.scheduler.waiting_requests)}, "
-                f"Active: {len(self.scheduler.active_requests)}. cum Q: {actual_query_length}. "
-                f"cum KV: {actual_key_length}, free blocks: {self.cache.get_num_free_blocks()}"
-            )
         return True
 
     @traced
@@ -390,25 +391,8 @@ class ContinuousBatchProcessor:
             )
             self._forward_process_and_sample_is_compiled = True
 
-        # If inputs are static sized, we find the padded sizes of the queries and keys/values
-        if self._pad_inputs:
-            # In all cases, we pad the queries
-            actual_query_length, _, _, actual_read_sizes, _ = self.inputs_and_outputs.get_actual_lengths()
-            padded_q = pad_to_interval(actual_query_length, self.q_padding_interval_size, self.max_batch_tokens)
-            # If the block table is used, we only pad the queries (padded_read_index_size is never 0 in the other case)
-            if self.inputs_and_outputs.use_block_table:
-                padded_read_index_size = 0
-            # Otherwise, we pad the read / write indices
-            else:
-                padded_read_index_size = pad_to_interval(
-                    size=max(actual_read_sizes),
-                    interval_size=self.kv_padding_interval_size,
-                    max_value=self.cache.num_pages,
-                )
-        else:
-            padded_q, padded_read_index_size = 0, 0
         # Retrieve the model kwargs with or without padding
-        batch_data = self.inputs_and_outputs.get_model_kwargs(padded_q, padded_read_index_size)
+        batch_data = self.inputs_and_outputs.get_model_kwargs(use_padding=self._pad_inputs)
         compute_stream = self.inputs_and_outputs.compute_stream
 
         # If we are not using cuda graphs, we perform the generation step and return
@@ -418,14 +402,13 @@ class ContinuousBatchProcessor:
 
         # Otherwise, we use create or replay the graph
         else:
-            graph = self.inputs_and_outputs.graphs.get_graph(padded_q, padded_read_index_size)
+            graph = self.inputs_and_outputs.get_graph()
             # Case: the graph already exists, so we replay it
             if graph is not None:
                 with torch.cuda.stream(compute_stream):
                     graph.replay()
             # Otherwise, the graph does not exist, so we create it
             else:
-                logger.info(f"Creating graph for {(padded_q, padded_read_index_size) = }")
                 # TODO: remove this once we are sure there are no race conditions
                 # compute_stream.wait_stream(torch.cuda.current_stream())
                 # Warmup
@@ -437,7 +420,7 @@ class ContinuousBatchProcessor:
                 with torch.cuda.graph(graph, stream=compute_stream):
                     self._forward_process_and_sample(model, batch_data, logit_processor, do_sample)
                 # Store
-                self.inputs_and_outputs.graphs.set_graph(padded_q, padded_read_index_size, graph)
+                self.inputs_and_outputs.set_graph(graph)
 
         # In any case, we transfer the outputs to the host
         self.inputs_and_outputs.retrieve_device_outputs()

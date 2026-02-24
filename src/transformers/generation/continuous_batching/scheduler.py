@@ -38,8 +38,8 @@ class Scheduler(ABC):
         self._requests_to_fork: list[RequestState] = []
         # This state is used to avoid infinite loops when offloading requests
         self.block_new_requests = False
-        # This is to compute the cache used by a new request being scheduled
-        self.cache_budget_module = None if cache.num_full_attention_groups else cache.config.sliding_window
+        # This is to compute the read cache used by a new request being scheduled
+        self.read_cache_limit = None if cache.num_full_attention_groups else cache.config.sliding_window
         self.max_decode_fast_path_length = cache.max_blocks_per_request * cache.block_size
 
     @traced
@@ -56,11 +56,15 @@ class Scheduler(ABC):
         self.waiting_requests_order.append(state.request_id)
 
     @abstractmethod
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
+    def schedule_batch(
+        self, token_budget: int, cache_budget: int
+    ) -> tuple[list[FutureRequestState] | None, bool, int, int]:
         """Schedules requests for the next batch based on available token and cache budgets. This method selects which
         requests should be processed in the current batch, considering the budgets and the scheduler's prioritization
         rules. The token_budget is the maximum number of tokens that can be processed in a batch, and the cache_budget
-        is the maximum number of KV cache entries that can be read in a batch."""
+        is the maximum number of KV cache entries that can be read in a batch.
+        Returns the list of scheduled requests in their "FutureRequestState" form, a boolean indicating if the decode
+        fast path can be used, the total number of query tokens and the maximum number of kv tokens read."""
 
     @traced
     def has_pending_requests(self) -> bool:
@@ -197,7 +201,7 @@ class Scheduler(ABC):
         cache_budget: int,
         request_ids_to_remove_from_waiting: set[str],
         safety_margin: float = 0.0,
-    ) -> tuple[list[FutureRequestState], bool, bool]:
+    ) -> tuple[list[FutureRequestState], bool, bool, int, int]:
         """Schedules candidate requests for the current batch.
 
         This method contains the common logic shared by all schedulers: it checks token and cache budgets, allocates
@@ -208,6 +212,7 @@ class Scheduler(ABC):
         one_allocation_failed = False
         decode_fast_path = True
         safety_margins = safety_margin * self.cache.num_blocks
+        original_token_budget, original_cache_budget = token_budget, cache_budget
 
         for state in candidates:
             num_free_blocks = self.cache.get_num_free_blocks()
@@ -220,11 +225,10 @@ class Scheduler(ABC):
                 break
 
             # Check cache budget
-            cache_needed = state.current_len()
-            cache_needed = (
-                cache_needed if self.cache_budget_module is None else cache_needed % self.cache_budget_module
-            )
-            if cache_budget < cache_needed:
+            read_cache_needed = state.current_len()
+            if self.read_cache_limit is not None:
+                read_cache_needed = min(read_cache_needed, self.read_cache_limit)
+            if cache_budget < read_cache_needed:
                 continue
 
             # Infer the tokens that will be present in the batch if token budget is enough
@@ -253,7 +257,7 @@ class Scheduler(ABC):
 
             # Update the token and cache budgets
             token_budget -= request_len
-            cache_budget -= cache_needed
+            cache_budget -= read_cache_needed
 
             # If using prefix sharing, we make note of the blocks that will be computed in the forward pass
             if self.cache.allow_block_sharing:
@@ -277,7 +281,9 @@ class Scheduler(ABC):
             if token_budget == 0 or cache_budget == 0:
                 break
 
-        return scheduled_requests, one_allocation_failed, decode_fast_path
+        num_q_tokens = original_token_budget - token_budget
+        max_kv_read = original_cache_budget - cache_budget
+        return scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read
 
     def _cleanup_waiting_queue(self, request_ids_to_remove_from_waiting: set[str]) -> None:
         """Removes processed requests from the waiting queue order."""
@@ -302,7 +308,9 @@ class FIFOScheduler(Scheduler):
         self.safety_margin = safety_margin
 
     @traced
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
+    def schedule_batch(
+        self, token_budget: int, cache_budget: int
+    ) -> tuple[list[FutureRequestState] | None, bool, int, int]:
         priority_states: list[RequestState] = []
         second_priority_states: list[RequestState] = []
 
@@ -319,7 +327,7 @@ class FIFOScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed, decode_fast_path = self._process_candidates(
+        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = self._process_candidates(
             candidates,
             token_budget,
             cache_budget,
@@ -332,9 +340,9 @@ class FIFOScheduler(Scheduler):
 
         # If no requests were scheduled and the cache is full, we signal it by returning None
         if not scheduled_requests and one_allocation_failed:
-            return None, decode_fast_path
+            return None, decode_fast_path, 0, 0
 
-        return scheduled_requests, decode_fast_path
+        return scheduled_requests, decode_fast_path, num_q_tokens, max_kv_read
 
 
 # FIXME: prioritize adding from waiting reqs before scheduling `RequestStatus.DECODING` when cache space allows it
@@ -346,7 +354,9 @@ class PrefillFirstScheduler(Scheduler):
     decoding requests."""
 
     @traced
-    def schedule_batch(self, token_budget: int, cache_budget: int) -> tuple[list[FutureRequestState] | None, bool]:
+    def schedule_batch(
+        self, token_budget: int, cache_budget: int
+    ) -> tuple[list[FutureRequestState] | None, bool, int, int]:
         priority_states: list[RequestState] = []
         second_priority_states: list[RequestState] = []
 
@@ -364,7 +374,7 @@ class PrefillFirstScheduler(Scheduler):
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
-        scheduled_requests, one_allocation_failed, decode_fast_path = self._process_candidates(
+        scheduled_requests, one_allocation_failed, decode_fast_path, num_q_tokens, max_kv_read = self._process_candidates(
             candidates,
             token_budget,
             cache_budget,
@@ -377,9 +387,9 @@ class PrefillFirstScheduler(Scheduler):
 
         # If no requests were scheduled and the cache is full, we signal it by returning None
         if not scheduled_requests and one_allocation_failed:
-            return None, decode_fast_path
+            return None, decode_fast_path, 0, 0
 
-        return scheduled_requests, decode_fast_path
+        return scheduled_requests, decode_fast_path, num_q_tokens, max_kv_read
 
 
 SCHEDULER_MAPPING = {
