@@ -702,6 +702,7 @@ class ContinuousBatchingManager:
         max_new_tokens: int | None = None,
         streaming: bool = False,
         record_timestamps: bool = False,
+        eos_token_id: int | list[int] | None = None,
     ) -> str:
         """Add a new generation request to the queue.
 
@@ -719,6 +720,7 @@ class ContinuousBatchingManager:
                 self._request_counter += 1
 
         max_new_tokens = self.generation_config.max_new_tokens if max_new_tokens is None else max_new_tokens
+        eos_token_id = self.generation_config.eos_token_id if eos_token_id is None else eos_token_id
 
         # NOTE: do we want to handle a case when the user wants token ids returned instead of decoded text?
         state = RequestState(
@@ -727,7 +729,7 @@ class ContinuousBatchingManager:
             num_children=self.num_return_sequences - 1,
             record_timestamps=record_timestamps,
             max_new_tokens=max_new_tokens,
-            eos_token_id=self.generation_config.eos_token_id,
+            eos_token_id=eos_token_id,
             streaming=streaming,
         )
 
@@ -750,9 +752,14 @@ class ContinuousBatchingManager:
         ids_and_inputs = list(zip(request_ids, inputs))
         if self._use_prefix_sharing:
             ids_and_inputs = sorted(ids_and_inputs, key=lambda x: x[1], reverse=True)
+        # Look for an EOS token ID in the generation config and then in the model config. If no EOS is found, we set it
+        # to -1 to avoid looking for it in each add_request call
+        eos_token_id = self.generation_config.eos_token_id
+        eos_token_id = self.model.config.eos_token_id if eos_token_id is None else eos_token_id
+        eos_token_id = -1 if eos_token_id is None else eos_token_id
         # Add requests in order
         for request_id, input_ids in ids_and_inputs:
-            self.add_request(input_ids, request_id, max_new_tokens, streaming, record_timestamps)
+            self.add_request(input_ids, request_id, max_new_tokens, streaming, record_timestamps, eos_token_id)
 
     def cancel_request(self, request_id: str) -> None:
         """Cancel a request by its ID.
