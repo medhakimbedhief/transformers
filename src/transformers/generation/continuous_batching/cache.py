@@ -214,7 +214,7 @@ class PagedAttentionCache:
         # means a max sequence length of 4096 tokens for the fast decode path.
         max_blocks_per_request = getattr(generation_config, "max_blocks_per_request", None)
         if max_blocks_per_request is None:
-            max_blocks_per_request = 64
+            max_blocks_per_request = 0
             logger.info(
                 f"max_blocks_per_request was not set, using {max_blocks_per_request}. This means max sequence "
                 f"length for the decode fast path is {max_blocks_per_request * self.block_size}."
