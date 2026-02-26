@@ -30,13 +30,14 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from ...configuration_utils import PretrainedConfig
 from ...generation.configuration_utils import CompileConfig, GenerationConfig
 from ...generation.logits_process import LogitsProcessorList
+from ...modeling_flash_attention_utils import lazy_import_paged_flash_attention
 from ...utils.logging import logging
 from ...utils.metrics import ContinuousBatchProcessorMetrics, attach_tracer, traced
 from .cache import PagedAttentionCache
 from .input_outputs import ContinuousBatchingAsyncIOs, ContinuousBatchingIOs
 from .requests import GenerationOutput, RequestState, RequestStatus, logger
 from .scheduler import SCHEDULER_MAPPING, FIFOScheduler, Scheduler
-from .utils import attn_mask_is_needed, pad_to_interval
+from .utils import attn_mask_is_needed, is_flash_attn_3, pad_to_interval
 
 
 """
@@ -149,6 +150,9 @@ class ContinuousBatchProcessor:
         self.max_batch_tokens = cache.max_batch_tokens
         self.metrics = ContinuousBatchProcessorMetrics(cache.max_batch_tokens)
 
+        # If the user turned on the decode fast path (ie. using a block table), check if it is available
+        self._ensure_decode_fast_path_is_available()  # this needs to happen before self.inputs_and_outputs is created
+
         # Setup inputs and outputs
         self.use_async_batching = use_async_batching
         time_forward_pass = timing_output_file is not None
@@ -175,6 +179,31 @@ class ContinuousBatchProcessor:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def _ensure_decode_fast_path_is_available(self) -> None:
+        """Ensures the decode fast path is available. If it is not, set the max blocks per request to 0."""
+        if self.cache.max_blocks_per_request > 0:
+            # NOTE: block table should be available with FA2 and FA3, but there seems to be an issue with FA2 atm
+            if is_flash_attn_3(self.config._attn_implementation):
+                flash_attn_with_kvcache = lazy_import_paged_flash_attention(self.config._attn_implementation)[1]
+                conditions = [
+                        self.cache.num_sliding_attention_groups == 0,  # TODO: add support for sliding window layers
+                        torch.cuda.is_available(),  # Block table is only supported on CUDA
+                        flash_attn_with_kvcache is not None,  # The `flash_attn_with_kvcache` fn is needed
+                        self.compile_config is None,  # TODO: add support for the decode fast path with compile
+                ]
+                if not all(conditions):
+                    logger.warning(
+                        f"Although {self.cache.max_blocks_per_request = }, the decode fast path is not available "
+                        f"because the one condition is not met: {conditions}."
+                    )
+                    self.cache.max_blocks_per_request = 0
+            else:
+                logger.warning(
+                    f"Although {self.cache.max_blocks_per_request = }, the decode fast path is not available "
+                    f"because the attention implementation is not FA3. Got {self.config._attn_implementation = }."
+                )
+                self.cache.max_blocks_per_request = 0
 
     @traced
     def _get_new_requests(self) -> None:
