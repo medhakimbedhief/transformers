@@ -49,6 +49,11 @@ class CudaGraphBuffer:
         self.plan_for_new_graph()
         self._storage[(q_len, kv_len)] = graph
 
+    def __del__(self) -> None:
+        original_max_size = self.max_size
+        self.max_size = 1  # 0 would cause an infinite loop, 1 is enough to clear all graphs
+        self.plan_for_new_graph()
+        self.max_size = original_max_size
 
 class CpuGpuTimeTracker:
     """Tracks CPU and GPU time spans for performance analysis. GPU times use async CUDA events for no added overhead.

@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import gc
 import json
 import queue
 import threading
@@ -168,6 +169,12 @@ class ContinuousBatchProcessor:
             f"active_requests={self.scheduler.active_requests}, waiting_requests={self.scheduler.waiting_requests})"
             + self.inputs_and_outputs.get_model_kwargs().__repr__()
         )
+
+    def __del__(self) -> None:
+        del self.inputs_and_outputs # clean up CUDA graphs in priority
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     @traced
     def _get_new_requests(self) -> None:
@@ -679,6 +686,9 @@ class ContinuousBatchingManager:
             self.join(stop_trigger_time, timeout)
 
         self.batch_processor = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def join(self, stop_trigger_time: float, timeout: float | None = None) -> None:
         """Wait for the background thread to finish.
