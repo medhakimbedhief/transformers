@@ -174,7 +174,7 @@ class Scheduler(ABC):
             self._requests_to_fork.append(state)
 
         # Case: we can process the entire prompt/remainder
-        if len(request_tokens) < token_budget:
+        if len(request_tokens) <= token_budget:
             if state.status == RequestStatus.PENDING:
                 self.active_requests[state.request_id] = state
                 request_ids_to_remove_from_waiting.add(state.request_id)
