@@ -166,6 +166,9 @@ class ContinuousBatchProcessor:
             self.inputs_and_outputs = ContinuousBatchingIOs(
                 cache, config, model_device, model_dtype, max_cached_graphs, time_forward_pass
             )
+        # Set up the graph pool. This allows all graphs to share the same memory pool, which is fine because they never
+        # run concurrently. This greatly saves memory.
+        self.graph_pool = torch.cuda.graph_pool_handle()
 
     def __repr__(self) -> str:
         return (
@@ -455,7 +458,7 @@ class ContinuousBatchProcessor:
                 # torch.cuda.current_stream().wait_stream(compute_stream)
                 # Capture
                 graph = torch.cuda.CUDAGraph()
-                with torch.cuda.graph(graph, stream=compute_stream):
+                with torch.cuda.graph(graph, stream=compute_stream, pool=self.graph_pool):
                     self._forward_process_and_sample(model, batch_data, logit_processor, do_sample)
                 # Store
                 self.inputs_and_outputs.set_graph(graph)
