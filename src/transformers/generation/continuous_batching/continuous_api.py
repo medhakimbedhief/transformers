@@ -282,7 +282,7 @@ class ContinuousBatchProcessor:
             return False
         self.metrics.record_queue_metrics(len(self.scheduler.active_requests), len(self.scheduler.waiting_requests))
 
-        # Schedule the next batch of requests, stop if there are no requests in the batch
+        # Schedule the next batch of requests
         requests_in_batch, use_decode_fast_path, num_q_tokens, max_kv_read = self.scheduler.schedule_batch(
             self.max_batch_tokens, self.cache.num_pages
         )
@@ -379,7 +379,10 @@ class ContinuousBatchProcessor:
 
         # The copy induced by the fork is done in one go (if it's even needed)
         if copy_source:
-            self.cache.copy_cache(copy_source, copy_destination)
+            # FIXME: this will avoid any race condition, but it can cause issue when using async batching with a sliding
+            # window model. Fix will be fixed in a PR in the near future (tempfix, v5.3)
+            with torch.cuda.stream(self.inputs_and_outputs.compute_stream):
+                self.cache.copy_cache(copy_source, copy_destination)
 
     @traced
     def has_pending_requests(self) -> bool:
