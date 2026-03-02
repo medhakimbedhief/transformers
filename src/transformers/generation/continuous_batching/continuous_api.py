@@ -95,7 +95,6 @@ class ContinuousBatchProcessor:
         model_device: torch.device,
         model_dtype: torch.dtype,
         scheduler: Scheduler,
-        manual_eviction: bool,
         use_cuda_graph: bool,
         q_padding_interval_size: int,
         kv_padding_interval_size: int,
@@ -115,7 +114,6 @@ class ContinuousBatchProcessor:
             model_device: Device for model inputs/outputs
             model_dtype: Data type for model inputs/outputs
             scheduler: The [`Scheduler`] to use
-            manual_eviction: Whether to manually evict blocks from the cache
             use_cuda_graph: Whether to use cuda graphs or not during CB. Check the docstring at the top of the file for
                 more details.
             q_padding_interval_size: Padding granularity for queries in tokens.
@@ -131,7 +129,6 @@ class ContinuousBatchProcessor:
         self.model_device = model_device
         self.model_dtype = model_dtype
         self.scheduler = scheduler
-        self.manual_eviction = manual_eviction
 
         # Retrieve the size of the sliding window if there is one
         self.sliding_window = 1 if getattr(config, "sliding_window", None) is None else config.sliding_window
@@ -264,7 +261,7 @@ class ContinuousBatchProcessor:
         # In async mode, this ensures the request is not updated in the other batch without triggering logging
         state._status = RequestStatus.FINISHED
         # Actual offloading of the request
-        self.scheduler.finish_request(request_id, evict_from_cache=True)
+        self.scheduler.finish_request(request_id)
         self.scheduler.add_waiting_request(new_state)
         # This flag blocks any new requests from being scheduled until one request is finished. This ensures that we
         # don't enter an offload / schedule loop
@@ -353,7 +350,7 @@ class ContinuousBatchProcessor:
                 self.cache.mark_shareable_blocks_as_complete(state, future_state.complete_blocks)
                 if is_finished:
                     self.metrics.record_request_completion(state.created_time, state.request_id)
-                    self.scheduler.finish_request(state.request_id, evict_from_cache=(not self.manual_eviction))
+                    self.scheduler.finish_request(state.request_id)
                     self.scheduler.block_new_requests = False
                 self._maybe_send_output(state)
             #  Otherwise, the request is still prefilling, but the prefill has been split
@@ -536,7 +533,6 @@ class ContinuousBatchingManager:
         self,
         model: ProtoPretrainedModel,
         generation_config: GenerationConfig,
-        manual_eviction: bool = False,
         max_queue_size: int = 0,
         q_padding_interval_size: int = 0,
         kv_padding_interval_size: int = 0,
@@ -564,7 +560,6 @@ class ContinuousBatchingManager:
 
         # Internal arguments
         self.model = model.eval()
-        self.manual_eviction = manual_eviction
         self._allow_block_sharing = allow_block_sharing
         self._use_prefix_sharing = allow_block_sharing  # approximation until the cache is created
 
@@ -898,8 +893,7 @@ class ContinuousBatchingManager:
                 stop_event=self.stop_event,
                 model_device=self.model.device,
                 model_dtype=self.model.dtype,
-                scheduler=scheduler(paged_attention_cache, self.manual_eviction),
-                manual_eviction=self.manual_eviction,
+                scheduler=scheduler(paged_attention_cache),
                 use_cuda_graph=self.use_cuda_graph,
                 q_padding_interval_size=self.q_padding_interval_size,
                 kv_padding_interval_size=self.kv_padding_interval_size,
@@ -965,14 +959,6 @@ class ContinuousBatchingManager:
         if batch_processor is not None:
             batch_processor.fail_all_requests(error)
 
-    @traced
-    def evict_request_from_cache(self, request_id: str) -> None:
-        """Evict a request from the cache. It is assumed that the request is already finished."""
-        if not self.manual_eviction:
-            raise RuntimeError("Manual eviction is not enabled for this manager.")
-        if self.batch_processor is not None:
-            self.batch_processor.scheduler.finish_request(request_id)
-
 
 class ContinuousMixin:
     """Mixin class for models to add continuous batching capabilities."""
@@ -983,7 +969,6 @@ class ContinuousMixin:
     def continuous_batching_context_manager(
         self,
         generation_config: GenerationConfig | None = None,
-        manual_eviction: bool = False,
         max_queue_size: int = 0,
         q_padding_interval_size: int = 0,
         kv_padding_interval_size: int = 0,
@@ -996,7 +981,6 @@ class ContinuousMixin:
     ) -> Generator[ContinuousBatchingManager]:
         manager = self.init_continuous_batching(
             generation_config=generation_config,
-            manual_eviction=manual_eviction,
             max_queue_size=max_queue_size,
             q_padding_interval_size=q_padding_interval_size,
             kv_padding_interval_size=kv_padding_interval_size,
@@ -1018,7 +1002,6 @@ class ContinuousMixin:
     def init_continuous_batching(
         self,
         generation_config: GenerationConfig | None = None,
-        manual_eviction: bool = False,
         max_queue_size: int = 0,
         q_padding_interval_size: int = 0,
         kv_padding_interval_size: int = 0,
@@ -1031,7 +1014,6 @@ class ContinuousMixin:
 
         Args:
             generation_config: An optional generation configuration, which may contain a CompileConfig object
-            manual_eviction: Whether to manually evict requests from the cache
             max_queue_size: Maximum size of the input request queue
             q_padding_interval_size: Padding granularity for queries in tokens. 0 uses default.
             kv_padding_interval_size: Padding granularity for KV cache in tokens. 0 uses default.
@@ -1057,7 +1039,6 @@ class ContinuousMixin:
         return ContinuousBatchingManager(
             model=self,
             generation_config=gen_config,
-            manual_eviction=manual_eviction,
             max_queue_size=max_queue_size,
             q_padding_interval_size=q_padding_interval_size,
             kv_padding_interval_size=kv_padding_interval_size,
