@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from math import ceil
-from time import perf_counter
 
 import torch
 
@@ -54,7 +53,6 @@ class CudaGraphBuffer:
         self.max_size = 1  # 0 would cause an infinite loop, 1 is enough to clear all graphs
         self.plan_for_new_graph()
         self.max_size = original_max_size
-
 
 
 def attn_mask_is_needed(config: PretrainedConfig) -> bool:
