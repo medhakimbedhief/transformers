@@ -24,7 +24,6 @@ from ...utils.metrics import traced
 from .cache import PagedAttentionCache
 from .requests import TMP_TOKEN_ID, FutureRequestState, logger
 from .utils import (
-    CpuGpuTimeTracker,
     CudaGraphBuffer,
     aligned_divide,
     attn_mask_is_needed,
@@ -99,7 +98,6 @@ class ContinuousBatchingIOs:
         device: torch.device,
         model_dtype: torch.dtype,
         max_graphs: int = 32,
-        time_forward_pass: bool = False,
     ) -> None:
         """Initialize the continuous batching I/O manager. Args:
         - cache: The [`PagedAttentionCache`] instance managing the KV cache. Meant to be unique.
@@ -129,14 +127,6 @@ class ContinuousBatchingIOs:
         self._setup_static_tensors()
         self._reset_static_tensors(full_reset=True)
         self.compute_stream = torch.cuda.Stream(device=self.device) if device.type == "cuda" else None
-        # Timing requires CUDA for GPU event recording
-        if time_forward_pass and device.type == "cuda":
-            self.time_tracker = CpuGpuTimeTracker(compute_stream=self.compute_stream)
-        elif time_forward_pass:
-            logger.warning("Timing is enabled but CUDA is not available. Timing will be disabled.")
-            self.time_tracker = None
-        else:
-            self.time_tracker = None
 
     @traced(standalone=True)
     def _setup_static_tensors(self) -> None:
@@ -298,9 +288,6 @@ class ContinuousBatchingIOs:
     def retrieve_device_outputs(self) -> None:
         if self.compute_stream is not None:
             self.compute_stream.synchronize()
-        if self.time_tracker is not None:
-            self.time_tracker.end_gpu_span()
-            self.time_tracker.start_cpu_span()
 
     def prepare_batch_update(self) -> tuple[list[FutureRequestState], list[int]]:
         requests_in_batch = self.requests_in_batch
@@ -486,10 +473,6 @@ class ContinuousBatchingIOs:
         if self.attention_mask is None:
             kwargs.attention_mask = None
 
-        if self.time_tracker is not None:
-            self.time_tracker.end_cpu_span()
-            self.time_tracker.start_gpu_span()
-
         kwargs_dict = kwargs.asdict()
         return kwargs_dict
 
@@ -515,8 +498,8 @@ class HostDeviceIOPair:
         max_graphs: int = 32,
     ) -> None:
         # The host IO has automatic pinned memory because it is created on the CPU
-        self.host_io = ContinuousBatchingIOs(cache, config, torch.device("cpu"), model_dtype, max_graphs, False)
-        self.device_io = ContinuousBatchingIOs(cache, config, device, model_dtype, max_graphs, False)
+        self.host_io = ContinuousBatchingIOs(cache, config, torch.device("cpu"), model_dtype, max_graphs)
+        self.device_io = ContinuousBatchingIOs(cache, config, device, model_dtype, max_graphs)
         self.h2d_over = torch.cuda.Event()
         self.compute_over = torch.cuda.Event()
         self.d2h_over = torch.cuda.Event()
@@ -582,7 +565,6 @@ class ContinuousBatchingAsyncIOs:
         device: torch.device,
         model_dtype: torch.dtype,
         max_graphs: int = 32,
-        time_forward_pass: bool = False,
     ) -> None:
         # IO pairs used to avoid race conditions
         self.current_pair = 0
@@ -598,14 +580,6 @@ class ContinuousBatchingAsyncIOs:
         self.io_pairs[1].device_io.compute_stream = None
         # Used in carry over ids computation
         self.max_batch_tokens = cache.max_batch_tokens
-        # Timing-related attributes
-        if time_forward_pass and device.type == "cuda":
-            self.time_tracker = CpuGpuTimeTracker(compute_stream=self.compute_stream)
-        elif time_forward_pass:
-            logger.warning("Timing is enabled but CUDA is not available. Timing will be disabled.")
-            self.time_tracker = None
-        else:
-            self.time_tracker = None
 
     # These methods are simple wrapper dispatching to the current IO pair
     def get_cumulative_seqlens(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -647,14 +621,8 @@ class ContinuousBatchingAsyncIOs:
         io_pair = self.io_pairs[self.current_pair]
         io_pair.transfer_inputs_h2d(self.h2d_stream)
         self.h2d_stream.record_event(io_pair.h2d_over)
-        if self.time_tracker is not None:
-            self.time_tracker.end_cpu_span()
-            self.time_tracker.start_idle_span()
         self.compute_stream.wait_event(io_pair.h2d_over)
         kwargs = io_pair.device_io.get_model_kwargs(use_padding=use_padding)
-        if self.time_tracker is not None:
-            self.time_tracker.end_idle_span()
-            self.time_tracker.start_gpu_span()
         return kwargs
 
     def carry_over_tokens(self, input_ids: torch.Tensor) -> None:
@@ -694,9 +662,6 @@ class ContinuousBatchingAsyncIOs:
     def retrieve_device_outputs(self) -> None:
         io_pair = self.io_pairs[self.current_pair]
         # Wait for compute to finish before starting D2H transfer
-        if self.time_tracker is not None:
-            self.time_tracker.end_gpu_span()
-            self.time_tracker.start_cpu_span()
         self.compute_stream.record_event(io_pair.compute_over)
         self.d2h_stream.wait_event(io_pair.compute_over)
         # Transfer the outputs to the host
